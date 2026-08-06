@@ -122,13 +122,22 @@ def process_ass(
     color: str = "&H00FFFF80",
     workers: int = 4,
     cache_path: str | None = None,
+    mode: str = "offset",
 ) -> None:
     with open(input_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     fontsize = parse_ass_style_fontsize(content)
-    trans_fs = max(18, int(fontsize * fontsize_ratio))
-    y_offset = fontsize + 4
+    y_offset = 0
+    orig_new_fs = 0
+    if mode == "inline":
+        # Split original fontsize between original and translation
+        # so combined height equals the original fontsize (no overlaps).
+        orig_new_fs = max(14, int(fontsize / (1.0 + fontsize_ratio)))
+        trans_fs = max(10, int(orig_new_fs * fontsize_ratio))
+    else:
+        trans_fs = max(18, int(fontsize * fontsize_ratio))
+        y_offset = fontsize + 4
 
     dialogue_re = re.compile(
         r"^Dialogue:\s*(\d+),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),(.*)$"
@@ -192,7 +201,10 @@ def process_ass(
                 an_match = re.search(r"\\an(\d+)", text)
                 info.an_tag = f"\\an{an_match.group(1)}" if an_match else ""
 
-        if info.move_params is None and info.pos_params is None:
+        # In offset mode, skip danmaku without positioning tags
+        # (we need coords to place the translation).
+        # In inline mode, every CJK danmaku is eligible.
+        if mode == "offset" and info.move_params is None and info.pos_params is None:
             continue
 
         dialogue_infos.append(info)
@@ -213,49 +225,79 @@ def process_ass(
         save_translation_cache(cache_path, merged_cache)
 
     new_lines = list(lines)
-    offset = 0
     translated_count = 0
 
-    for info in dialogue_infos:
-        translated = merged_cache.get(info.display_text)
-        if not translated:
-            continue
+    if mode == "inline":
+        for info in dialogue_infos:
+            translated = merged_cache.get(info.display_text)
+            if not translated:
+                continue
 
-        esc_translated = translated.translate(_ASS_ESCAPE)
-        new_layer = str(int(info.layer) + 2) if info.layer.isdigit() else info.layer
+            esc_translated = translated.translate(_ASS_ESCAPE)
 
-        override: str | None = None
-        if info.move_params:
-            parts = [p.strip() for p in info.move_params.split(",")]
-            if len(parts) >= 4:
-                x1, y1, x2, y2 = parts[0], parts[1], parts[2], parts[3]
-                ny1 = str(int(y1) + y_offset)
-                ny2 = str(int(y2) + y_offset)
-                override = (
-                    f"{{\\move({x1}, {ny1}, {x2}, {ny2})"
-                    f"\\fs{trans_fs}\\c{color}\\alpha&H00}}"
+            orig_line = new_lines[info.line_idx]
+            m = dialogue_re.match(orig_line)
+            if not m:
+                continue
+            groups = list(m.groups())
+            orig_text = groups[9]
+
+            idx = orig_text.rfind(info.display_text)
+            if idx == -1:
+                new_display = f"{{\\fs{orig_new_fs}}}{orig_text}\\N{{\\fs{trans_fs}\\c{color}\\alpha&H00}}{esc_translated}"
+            else:
+                new_display = (
+                    orig_text[:idx]
+                    + f"{{\\fs{orig_new_fs}}}"
+                    + orig_text[idx:]
+                    + f"\\N{{\\fs{trans_fs}\\c{color}\\alpha&H00}}{esc_translated}"
                 )
-        elif info.pos_params:
-            parts = [p.strip() for p in info.pos_params.split(",")]
-            if len(parts) >= 2:
-                x, y = parts[0], parts[1]
-                ny = str(int(y) + y_offset)
-                override = (
-                    f"{{{info.an_tag}\\pos({x}, {ny})"
-                    f"\\fs{trans_fs}\\c{color}\\alpha&H00}}"
-                )
+            groups[9] = new_display
+            new_lines[info.line_idx] = "Dialogue: " + ",".join(groups)
+            translated_count += 1
+    else:
+        offset = 0
 
-        if override is None:
-            continue
+        for info in dialogue_infos:
+            translated = merged_cache.get(info.display_text)
+            if not translated:
+                continue
 
-        trans_line = (
-            f"Dialogue: {new_layer},{info.start},{info.end},{info.style},,"
-            f"{info.marginL},{info.marginR},{info.marginV},,{override}{esc_translated}"
-        )
-        insert_idx = info.line_idx + 1 + offset
-        new_lines.insert(insert_idx, trans_line)
-        offset += 1
-        translated_count += 1
+            esc_translated = translated.translate(_ASS_ESCAPE)
+            new_layer = str(int(info.layer) + 2) if info.layer.isdigit() else info.layer
+
+            override: str | None = None
+            if info.move_params:
+                parts = [p.strip() for p in info.move_params.split(",")]
+                if len(parts) >= 4:
+                    x1, y1, x2, y2 = parts[0], parts[1], parts[2], parts[3]
+                    ny1 = str(int(y1) + y_offset)
+                    ny2 = str(int(y2) + y_offset)
+                    override = (
+                        f"{{\\move({x1}, {ny1}, {x2}, {ny2})"
+                        f"\\fs{trans_fs}\\c{color}\\alpha&H00}}"
+                    )
+            elif info.pos_params:
+                parts = [p.strip() for p in info.pos_params.split(",")]
+                if len(parts) >= 2:
+                    x, y = parts[0], parts[1]
+                    ny = str(int(y) + y_offset)
+                    override = (
+                        f"{{{info.an_tag}\\pos({x}, {ny})"
+                        f"\\fs{trans_fs}\\c{color}\\alpha&H00}}"
+                    )
+
+            if override is None:
+                continue
+
+            trans_line = (
+                f"Dialogue: {new_layer},{info.start},{info.end},{info.style},,"
+                f"{info.marginL},{info.marginR},{info.marginV},,{override}{esc_translated}"
+            )
+            insert_idx = info.line_idx + 1 + offset
+            new_lines.insert(insert_idx, trans_line)
+            offset += 1
+            translated_count += 1
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))
@@ -275,8 +317,13 @@ def main() -> None:
     parser.add_argument("--color", default="&H00FFFF80", help="ASS hex color (default: &H00FFFF80)")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent workers (default: 4)")
     parser.add_argument("--cache", default=None, help="Path to JSON translation cache file")
+    parser.add_argument("--mode", default="offset", choices=["offset", "inline"],
+                        help="Layout mode: 'offset' places translation below (separate line), "
+                             "'inline' embeds it in the original line (no overlap, "
+                             "scaled fonts to keep original height). Default: offset")
     args = parser.parse_args()
-    process_ass(args.input, args.output, args.target, args.ratio, args.color, args.workers, args.cache)
+    process_ass(args.input, args.output, args.target, args.ratio, args.color,
+                args.workers, args.cache, mode=args.mode)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@ local TRANSLATE_TARGET = get_opt('danmaku_translate_target', 'en')
 local TRANSLATE_FONTSIZE_RATIO = get_opt('danmaku_translate_fontsize_ratio', '0.7')
 local TRANSLATE_COLOR = get_opt('danmaku_translate_color', '&H00FFFF80')
 local TRANSLATE_WORKERS = get_opt('danmaku_translate_workers', '4')
+local TRANSLATE_MODE = get_opt('danmaku_translate_mode', 'offset')
 local PYTHON3 = get_opt('python3_executable', 'python3')
 
 local danmaku_track_id = nil
@@ -144,6 +145,7 @@ function run_translate(ass_filename, cache_filename)
 		'--ratio', TRANSLATE_FONTSIZE_RATIO,
 		'--color', TRANSLATE_COLOR,
 		'--workers', TRANSLATE_WORKERS,
+		'--mode', TRANSLATE_MODE,
 		'--cache', cache_filename,
 	}
 	mp.msg.info('running danmaku translate: '..table.concat(translate_args, ' '))
