@@ -67,6 +67,7 @@ local PYTHON3 = get_opt('python3_executable', 'python3')
 
 local danmaku_track_id = nil
 local xml_filename = nil
+local active_ass_filename = nil
 local has_unloaded = false
 local is_translating = false
 local danmaku_loaded = false
@@ -182,6 +183,7 @@ function replace_sub()
 		end
 		local cache_filename = CACHEDIR..'/translate_cache.json'
 		ass_filename = run_translate(ass_filename, cache_filename)
+		active_ass_filename = ass_filename
 		local sid = mp.get_property('track-list/'..danmaku_track_id..'/id')
 		mp.msg.debug('deleting original subtitle sid='..sid)
 		mp.commandv('sub-remove', sid)
@@ -211,7 +213,20 @@ function unload_handler()
 	os.remove(prefix..'_translated.ass')
 end
 
+function export_translated_ass()
+	if not active_ass_filename then
+		mp.osd_message('No translated danmaku loaded', 3)
+		return
+	end
+	local export_dir = os.getenv('HOME')..'/danmaku_exports'
+	os.execute('mkdir -p '..export_dir)
+	local dest = export_dir..'/'..os.date('%Y%m%d_%H%M%S')..'_translated.ass'
+	os.execute('cp '..active_ass_filename..' '..dest)
+	mp.osd_message('Danmaku exported: '..dest, 3)
+end
+
 mp.register_event('file-loaded', download_xml)
 mp.observe_property('osd-width', nil, replace_sub)
 mp.observe_property('osd-height', nil, replace_sub)
 mp.add_hook('on_unload', 50, unload_handler)
+mp.add_key_binding('Ctrl+e', 'export-danmaku', export_translated_ass)
